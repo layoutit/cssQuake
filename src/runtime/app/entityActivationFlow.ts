@@ -1,4 +1,3 @@
-import { quakeMapLoadFailureIsCurrent, type QuakeMapLoadResult } from "./mapLoadOwnership";
 import type { Vec3 } from "@layoutit/polycss";
 
 import type { QuakeGameLogicFacts } from "../../prepare/gameLogicFacts";
@@ -50,7 +49,7 @@ export interface QuakeEntityActivationFlowOptions {
   currentGameLogic(): QuakeGameLogicFacts | null | undefined;
   entities(): ReadonlyMap<number, QuakeEntity>;
   getOrigin(): [number, number, number];
-  loadMap(mapName: string, options: { loadingStatus: string; resumeGameplay: boolean }): Promise<QuakeMapLoadResult>;
+  loadMap(mapName: string, options: { loadingStatus: string; resumeGameplay: boolean }): Promise<void>;
   mapExists(mapName: string): boolean;
   intermission: QuakeEntityActivationIntermission;
   movers: Pick<QuakeMoversController, "activateEntity" | "forceDoorsDownAfter" | "get">;
@@ -445,7 +444,6 @@ export function createQuakeEntityActivationFlow(
     try {
       await options.loadMap(nextMap, { loadingStatus: "Loading", resumeGameplay: true });
     } catch (error) {
-      if (!quakeMapLoadFailureIsCurrent(error)) return true;
       console.error(error);
       options.text.setCenterPrint(`COULD NOT LOAD ${nextMap.toUpperCase()}`);
     }

@@ -16,7 +16,7 @@ export interface QuakeViewmodelAssetFlowOptions {
 
 export interface QuakeViewmodelAssetFlow {
   clearMountedState(): void;
-  mount(modelPromise?: Promise<QuakeViewmodelModel>, isCurrent?: () => boolean): Promise<void>;
+  mount(modelPromise?: Promise<QuakeViewmodelModel>): Promise<void>;
   preload(progress?: QuakeLoadingProgressTracker, modelPath?: string): Promise<QuakeViewmodelModel>;
   syncActiveWeaponViewModel(): void;
 }
@@ -65,9 +65,9 @@ export function createQuakeViewmodelAssetFlow(options: QuakeViewmodelAssetFlowOp
     return model;
   }
 
-  async function mount(modelPromise = preload(), isCurrent: () => boolean = () => true): Promise<void> {
+  async function mount(modelPromise = preload()): Promise<void> {
     const model = await modelPromise;
-    if (options.isDisposed() || !isCurrent()) return;
+    if (options.isDisposed()) return;
     mountModel(model);
     syncActiveWeaponViewModel();
   }

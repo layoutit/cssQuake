@@ -1,4 +1,3 @@
-import type { QuakeSceneStateView, QuakeSceneStateWriter } from "./sceneState";
 import type { Vec3 } from "@layoutit/polycss";
 
 import type { QuakeEntity, QuakeScene } from "../../types/quake";
@@ -25,6 +24,14 @@ import type { QuakeWeaponsController } from "../weapons";
 import type { QuakeDamageableBrushFlow } from "./damageableBrushFlow";
 import type { QuakePointHazardFlow } from "./pointHazardFlow";
 
+interface QuakeSceneMountStateHooks {
+  setCollisionWorld(world: QuakeCollisionWorld | null): void;
+  setCurrentScene(scene: QuakeScene | null): void;
+  setEntityIndex(index: Map<number, QuakeEntity>): void;
+  setModelPivot(pivot: { x: number; y: number; z: number }): void;
+  setTransitionSerial(value: number): void;
+}
+
 export interface QuakeSceneMountFlowOptions {
   audio: QuakeSoundController;
   damageableBrushes: QuakeDamageableBrushFlow;
@@ -34,8 +41,7 @@ export interface QuakeSceneMountFlowOptions {
   player: QuakePlayerController;
   pointHazards: QuakePointHazardFlow;
   shootables: QuakeShootablesController;
-  state: { view: QuakeSceneStateView; writer: QuakeSceneStateWriter };
-  onModelPivotChange(pivot: { x: number; y: number; z: number }): void;
+  state: QuakeSceneMountStateHooks;
   targets: QuakeTargetsController;
   triggers: QuakeTriggersController;
   viewmodel: QuakeViewmodelController;
@@ -53,6 +59,7 @@ export interface QuakeSceneMountFlowOptions {
   setCamera(spawn: QuakeScene["spawn"]): void;
   syncCrosshairTarget(): void;
   trace(kind: string, details?: Record<string, unknown>): void;
+  transitionSerial(): number;
   focusCurrentMenu(): void;
 }
 
@@ -63,7 +70,6 @@ export interface QuakeSceneMountFlow {
   isPointInPlayerView(point: Vec3, minDot: number): boolean;
   lineOfSight(start: Vec3, end: Vec3): boolean;
   mountScene(scene: QuakeScene): void;
-  prepareScene(scene: QuakeScene): () => void;
   playerViewDot(point: Vec3): number;
   respawnScene(scene: QuakeScene, previousOrigin: [number, number, number]): void;
   setupMonsterJumpTriggers(scene: QuakeScene): void;
@@ -74,7 +80,10 @@ export interface QuakeSceneMountFlow {
 }
 
 export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): QuakeSceneMountFlow {
-  const state = options.state.view;
+  let entityByIndex = new Map<number, QuakeEntity>();
+  let currentScene: QuakeScene | null = null;
+  let currentCollisionWorld: QuakeCollisionWorld | null = null;
+  let modelPivot = { x: 0, y: 0, z: 0 };
 
   function disposeCurrentScene(): void {
     options.beforeDisposeScene();
@@ -95,20 +104,16 @@ export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): 
     setModelPivot({ x: 0, y: 0, z: 0 });
     options.audio.syncAmbientEntities([]);
     options.weapons.reset();
-    options.state.writer.setTransitionSerial(0);
+    options.state.setTransitionSerial(0);
   }
 
-  function prepareScene(scene: QuakeScene): () => void {
-    const collisionWorld = scene.collision ? buildQuakeClipCollisionWorld(scene.collision) : null;
-    if (!collisionWorld) throw new Error(`Prepared Quake scene ${scene.label} is missing collision data.`);
-    return () => mountPreparedScene(scene, collisionWorld);
-  }
-
-  function mountPreparedScene(scene: QuakeScene, collisionWorld: QuakeCollisionWorld): void {
+  function mountScene(scene: QuakeScene): void {
     disposeCurrentScene();
     setCurrentScene(scene);
     clearSkyBackground();
+    const collisionWorld = scene.collision ? buildQuakeClipCollisionWorld(scene.collision) : null;
     setCollisionWorld(collisionWorld);
+    if (!collisionWorld) throw new Error(`Prepared Quake scene ${scene.label} is missing collision data.`);
     options.world.mount(scene);
     setupEntityActions(scene);
     const runtime = scene.entityManifest.runtime;
@@ -159,7 +164,7 @@ export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): 
     options.movers.setup(
       entitiesForIndexes([...runtime.moverEntityIndexes, ...runtime.moverSupportEntityIndexes]),
       scene.models,
-      state.modelPivot,
+      modelPivot,
       scene.gameLogic,
     );
   }
@@ -170,14 +175,14 @@ export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): 
     for (const index of indexes) {
       if (seen.has(index)) continue;
       seen.add(index);
-      const entity = state.entities.get(index);
+      const entity = entityByIndex.get(index);
       if (entity) out.push(entity);
     }
     return out;
   }
 
   function lineOfSight(start: Vec3, end: Vec3): boolean {
-    const trace = state.collisionWorld?.traceUse?.(start, end);
+    const trace = currentCollisionWorld?.traceUse?.(start, end);
     return !trace || trace.fraction >= 0.96;
   }
 
@@ -213,9 +218,9 @@ export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): 
   }
 
   function syncDebugGameplay(origin: [number, number, number]): void {
-    const transitionSerial = state.transitionSerial;
+    const transitionSerial = options.transitionSerial();
     const triggers = syncTouchedTriggers(origin);
-    if (state.transitionSerial !== transitionSerial) return;
+    if (options.transitionSerial() !== transitionSerial) return;
 
     const currentOrigin = options.player.currentOrigin();
     if (syncHazards(currentOrigin, triggers)) return;
@@ -228,7 +233,7 @@ export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): 
 
   function currentTouchedTriggers(origin: [number, number, number]): QuakeTouchedTrigger[] {
     return [
-      ...(state.collisionWorld?.touchingTriggers?.(origin, options.player.eyeHeight()) ?? []),
+      ...(currentCollisionWorld?.touchingTriggers?.(origin, options.player.eyeHeight()) ?? []),
       ...options.movers.touchingDoorTriggerFields(origin, options.player.eyeHeight()),
     ].filter((trigger) => !options.targets.isDisabled(trigger.entityIndex));
   }
@@ -239,17 +244,17 @@ export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): 
   ): QuakeHazardDamage | null {
     let hazard: QuakeHazardDamage | null = null;
     for (const trigger of triggers) {
-      const entity = state.entities.get(trigger.entityIndex);
+      const entity = entityByIndex.get(trigger.entityIndex);
       if (!entity) continue;
-      const triggerHazard = quakeTriggerHurtDamage(entity, state.scene?.gameLogic);
+      const triggerHazard = quakeTriggerHurtDamage(entity, currentScene?.gameLogic);
       hazard = strongerHazard(
         hazard,
         triggerHazard ? { ...triggerHazard, entityIndex: trigger.entityIndex } : null,
       );
     }
     hazard = strongerHazard(hazard, options.pointHazards.hazardAt(origin));
-    const contents = state.collisionWorld?.contentsAt?.(playerContentsPoint(origin));
-    const waterLevel = quakePlayerWaterLevel(state.collisionWorld?.contentsAt, origin, options.player.eyeHeight());
+    const contents = currentCollisionWorld?.contentsAt?.(playerContentsPoint(origin));
+    const waterLevel = quakePlayerWaterLevel(currentCollisionWorld?.contentsAt, origin, options.player.eyeHeight());
     const contentsHazard = quakeContentsDamageForWaterLevel(contents, waterLevel);
     const radsuitActive = (
       contentsHazard?.kind === "slime" ||
@@ -277,26 +282,29 @@ export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): 
     options.shootables.setupMonsterJumpTriggers(
       scene.entities.filter((entity) => entity.classname === "trigger_monsterjump"),
       scene.models,
-      scene.collision?.pivot ?? state.modelPivot,
+      scene.collision?.pivot ?? modelPivot,
       scene.gameLogic,
     );
   }
 
   function setEntityIndex(index: Map<number, QuakeEntity>): void {
-    options.state.writer.setEntityIndex(index);
+    entityByIndex = index;
+    options.state.setEntityIndex(index);
   }
 
   function setCollisionWorld(world: QuakeCollisionWorld | null): void {
-    options.state.writer.setCollisionWorld(world);
+    currentCollisionWorld = world;
+    options.state.setCollisionWorld(world);
   }
 
   function setCurrentScene(scene: QuakeScene | null): void {
-    options.state.writer.setCurrentScene(scene);
+    currentScene = scene;
+    options.state.setCurrentScene(scene);
   }
 
   function setModelPivot(pivot: { x: number; y: number; z: number }): void {
-    options.state.writer.setModelPivot(pivot);
-    options.onModelPivotChange(pivot);
+    modelPivot = pivot;
+    options.state.setModelPivot(pivot);
   }
 
   return {
@@ -305,8 +313,7 @@ export function createQuakeSceneMountFlow(options: QuakeSceneMountFlowOptions): 
     entitiesForIndexes,
     isPointInPlayerView,
     lineOfSight,
-    mountScene: scene => prepareScene(scene)(),
-    prepareScene,
+    mountScene,
     playerViewDot,
     respawnScene,
     setupMonsterJumpTriggers,

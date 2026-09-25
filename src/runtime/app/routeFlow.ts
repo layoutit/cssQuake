@@ -1,4 +1,3 @@
-import { quakeMapLoadFailureCause, quakeMapLoadFailureIsCurrent, type QuakeMapLoadResult } from "./mapLoadOwnership";
 import {
   parseQuakeUrlRouteFromLocation,
   quakeUrlForMapView,
@@ -18,7 +17,6 @@ export interface QuakeCssView {
 
 export interface QuakeRouteFlowOptions<TView> {
   applyView(view: TView): void;
-  canLoadMap(): boolean;
   clearStartupState(): void;
   currentMapName(): string;
   currentView(): TView;
@@ -26,7 +24,7 @@ export interface QuakeRouteFlowOptions<TView> {
   hideMainMenu(): void;
   isDisposed(): boolean;
   isLoading(): boolean;
-  loadMap(mapName: string, options: QuakeMapLoadOptions): Promise<QuakeMapLoadResult>;
+  loadMap(mapName: string, options: QuakeMapLoadOptions): Promise<void>;
   mapExists(mapName: string): boolean;
   menuEnabled: boolean;
   compactMultiplayerInviteMapName?: (inviteId: string) => string | null;
@@ -55,8 +53,6 @@ export interface QuakeRouteFlow<TView> {
 export function createQuakeRouteFlow<TView>(
   options: QuakeRouteFlowOptions<TView>,
 ): QuakeRouteFlow<TView> {
-  let navigationGeneration = 0;
-
   function routeFromLocation(): QuakeUrlRoute {
     return parseQuakeUrlRouteFromLocation(window.location, {
       compactMultiplayerInviteMapName: options.compactMultiplayerInviteMapName,
@@ -129,10 +125,9 @@ export function createQuakeRouteFlow<TView>(
   }
 
   function handlePopState(): void {
-    if (options.isDisposed() || !options.canLoadMap()) return;
-    ++navigationGeneration;
+    if (options.isDisposed() || options.isLoading()) return;
     const route = routeFromLocation();
-    if (!options.isLoading() && options.currentMapName() === route.mapName && options.hasCurrentScene()) {
+    if (options.currentMapName() === route.mapName && options.hasCurrentScene()) {
       const currentRouteView = routeView(route);
       if (currentRouteView) {
         options.applyView(currentRouteView);
@@ -150,18 +145,13 @@ export function createQuakeRouteFlow<TView>(
   }
 
   function navigateToRoute(route: QuakeUrlRoute): void {
-    const generation = navigationGeneration;
-    const isCurrent = () => !options.isDisposed() && generation === navigationGeneration;
     void options.loadMap(route.mapName, { urlMode: "none", view: route.view })
-      .then((loaded) => {
-        if (loaded && loaded.isCurrent() && isCurrent() && !options.isLoading() && options.currentMapName() === route.mapName) {
-          syncPresentation(route);
-        }
+      .then(() => {
+        if (!options.isDisposed()) syncPresentation(route);
       })
       .catch((error) => {
-        if (!isCurrent() || !quakeMapLoadFailureIsCurrent(error)) return;
-        error = quakeMapLoadFailureCause(error);
         console.error(error);
+        if (options.isDisposed()) return;
         if (error instanceof QuakeAssetsRegeneratingError) {
           options.setAssetsRegenerating(error.message);
         } else {

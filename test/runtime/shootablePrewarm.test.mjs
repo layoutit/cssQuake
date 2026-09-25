@@ -28,9 +28,6 @@ test("timed-out shootable prewarm drain mounts the selected small batch", () => 
     ]);
     const mounted = [];
     const queues = createQuakeShootablePrewarmQueues({
-      hasHandle: (shootable) => shootable.handle !== null,
-      isVisible: (shootable) => shootable.visible,
-      hasFrame: (shootable, frame) => shootable.frameHandles.has(frame),
       canPoolAnimationFrame: () => false,
       canPrewarmShootable: () => true,
       ensureAnimationFrame: () => undefined,
@@ -87,9 +84,6 @@ test("prewarm drain keeps one-mesh minimum when idle time is exhausted", () => {
     ]);
     const mounted = [];
     const queues = createQuakeShootablePrewarmQueues({
-      hasHandle: (shootable) => shootable.handle !== null,
-      isVisible: (shootable) => shootable.visible,
-      hasFrame: (shootable, frame) => shootable.frameHandles.has(frame),
       canPoolAnimationFrame: () => false,
       canPrewarmShootable: () => true,
       ensureAnimationFrame: () => undefined,

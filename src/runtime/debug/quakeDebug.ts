@@ -1,4 +1,3 @@
-import { quakeMapLoadFailureIsCurrent, type QuakeMapLoadResult } from "../app/mapLoadOwnership";
 import type { Vec3 } from "@layoutit/polycss";
 
 import type { QuakeEntity } from "../../types/quake";
@@ -186,7 +185,7 @@ export interface QuakeDebugRuntime {
   hideMainMenu(): void;
   inventory(): QuakePlayerInventory;
   isLoading(): boolean;
-  loadMap(mapName: string): Promise<QuakeMapLoadResult>;
+  loadMap(mapName: string): Promise<void>;
   mapExists(mapName: string): boolean;
   getWeaponTuning(): QuakeResolvedViewmodelTuning;
   resetWeaponTuning(): QuakeResolvedViewmodelTuning;
@@ -533,14 +532,7 @@ async function loadQuakeDebugMap(runtime: QuakeDebugRuntime, mapName: string): P
   }
   if (runtime.isLoading()) return false;
   runtime.hideMainMenu();
-  let loaded: QuakeMapLoadResult;
-  try {
-    loaded = await runtime.loadMap(nextMapName);
-  } catch (error) {
-    if (!quakeMapLoadFailureIsCurrent(error)) return false;
-    throw error;
-  }
-  if (!loaded || !loaded.isCurrent()) return false;
+  await runtime.loadMap(nextMapName);
   runtime.hideMainMenu();
   return true;
 }

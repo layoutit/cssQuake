@@ -51,6 +51,7 @@ const renderBundleRootVarsCache = new WeakMap<QuakePreparedRenderBundle, Map<str
 const renderBundleElementRootVarNames = new WeakMap<HTMLElement, Set<string>>();
 const renderBundleStyleCache = new Map<string, HTMLStyleElement | HTMLLinkElement>();
 const renderBundleStyleLoadPromises = new Map<string, Promise<void>>();
+const renderBundleLoadedStyles = new WeakSet<HTMLLinkElement>();
 const renderBundleLeafFrameStylesLoadPromises = new Map<string, Promise<QuakeRenderBundleLeafFrameStylesFile>>();
 const renderBundleDebugOutlinePreloads = new WeakMap<QuakePreparedRenderBundle, Promise<void>>();
 const renderBundleDebugTransparentOutlinePreloads = new WeakMap<QuakePreparedRenderBundle, Promise<void>>();
@@ -689,9 +690,8 @@ function ensureQuakeRenderBundleStyles(
     const link = document.createElement("link");
     link.rel = "stylesheet";
     link.href = resolveQuakeAssetUrl(renderBundle.styleUrl);
-    renderBundleStyleCache.set(key, link);
-    trackQuakeRenderBundleStyle(key, link);
     document.head.append(link);
+    renderBundleStyleCache.set(key, link);
     return link;
   }
   if (!renderBundle.meshCss) return null;
@@ -1350,33 +1350,26 @@ function quakeRenderBundleUrlBasename(url: string): string {
 function preloadQuakeRenderBundleStyle(renderBundle: QuakePreparedRenderBundle): Promise<void> {
   const key = quakeRenderBundleStyleKey(renderBundle);
   if (!key) return Promise.resolve();
-  ensureQuakeRenderBundleStyles(renderBundle, document);
-  return renderBundleStyleLoadPromises.get(key) ?? Promise.resolve();
-}
-
-function trackQuakeRenderBundleStyle(key: string, element: HTMLLinkElement): void {
-  // Register before insertion so even an immediate cached load/error is observed.
-  const promise = new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      element.removeEventListener("load", loaded);
-      element.removeEventListener("error", failed);
+  const existing = renderBundleStyleLoadPromises.get(key);
+  if (existing) return existing;
+  const element = ensureQuakeRenderBundleStyles(renderBundle, document);
+  if (!(element instanceof HTMLLinkElement)) return Promise.resolve();
+  const promise = new Promise<void>((resolve) => {
+    if (renderBundleLoadedStyles.has(element) || element.sheet) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      renderBundleLoadedStyles.add(element);
+      element.removeEventListener("load", done);
+      element.removeEventListener("error", done);
+      resolve();
     };
-    const loaded = () => { cleanup(); resolve(); };
-    const failed = () => {
-      cleanup();
-      if (renderBundleStyleCache.get(key) === element) {
-        renderBundleStyleCache.delete(key);
-        renderBundleStyleLoadPromises.delete(key);
-      }
-      element.remove();
-      reject(new Error(`Could not load Quake render bundle stylesheet ${element.href}.`));
-    };
-    element.addEventListener("load", loaded);
-    element.addEventListener("error", failed);
+    element.addEventListener("load", done);
+    element.addEventListener("error", done);
   });
   renderBundleStyleLoadPromises.set(key, promise);
-  // Mount can initiate a load before readiness awaits it. Preserve the rejection for readiness.
-  void promise.catch(() => {});
+  return promise;
 }
 
 async function loadQuakeRenderBundleLeafFrameStyles(renderBundle: QuakePreparedRenderBundle): Promise<void> {
@@ -1391,24 +1384,17 @@ async function loadQuakeRenderBundleLeafFrameStyles(renderBundle: QuakePreparedR
       });
     renderBundleLeafFrameStylesLoadPromises.set(url, promise);
   }
-  try {
-    const file = await promise;
-    if (file.version !== 3) {
-      throw new Error(`Unsupported Quake render bundle frame styles version ${String(file.version)} in ${url}.`);
-    }
-    const frameIndex = renderBundle.leafFrameStylesIndex ?? 0;
-    const frameStyles = file.frames[frameIndex];
-    if (!frameStyles) {
-      throw new Error(`Quake render bundle frame styles missing frame ${frameIndex} in ${url}.`);
-    }
-    renderBundle.leafFrameStyles = hydrateQuakePackedRenderBundleLeafFrameStyles(file.frames, frameIndex);
-    quakeRenderBundleCompiledLeafFrameStyles(renderBundle);
-  } catch (error) {
-    if (renderBundleLeafFrameStylesLoadPromises.get(url) === promise) {
-      renderBundleLeafFrameStylesLoadPromises.delete(url);
-    }
-    throw error;
+  const file = await promise;
+  if (file.version !== 3) {
+    throw new Error(`Unsupported Quake render bundle frame styles version ${String(file.version)} in ${url}.`);
   }
+  const frameIndex = renderBundle.leafFrameStylesIndex ?? 0;
+  const frameStyles = file.frames[frameIndex];
+  if (!frameStyles) {
+    throw new Error(`Quake render bundle frame styles missing frame ${frameIndex} in ${url}.`);
+  }
+  renderBundle.leafFrameStyles = hydrateQuakePackedRenderBundleLeafFrameStyles(file.frames, frameIndex);
+  quakeRenderBundleCompiledLeafFrameStyles(renderBundle);
 }
 
 function hydrateQuakePackedRenderBundleLeafFrameStyles(
@@ -1870,16 +1856,11 @@ function preloadQuakeRenderBundleAsset(url: string): Promise<void> {
   image.decoding = "async";
   image.loading = "eager";
   (image as HTMLImageElement & { fetchPriority?: "low" | "high" | "auto" }).fetchPriority = "high";
-  const promise = new Promise<void>((resolve, reject) => {
+  const promise = new Promise<void>((resolve) => {
     image.onload = () => {
       void image.decode().catch(() => undefined).finally(resolve);
     };
-    image.onerror = () => reject(new Error(`Could not load Quake render bundle image ${resolvedUrl}.`));
-  }).catch((error) => {
-    if (renderBundleAssetPreloads.get(resolvedUrl)?.image === image) {
-      renderBundleAssetPreloads.delete(resolvedUrl);
-    }
-    throw error;
+    image.onerror = () => resolve();
   });
   renderBundleAssetPreloads.set(resolvedUrl, { image, promise });
   image.src = resolvedUrl;

@@ -21,6 +21,9 @@ export interface QuakeShootableState {
     min: Vec3;
     max: Vec3;
   };
+  handle: PolyMeshHandle | null;
+  frameHandles: Map<number, PolyMeshHandle>;
+  visible: boolean;
   lastMountCandidateAt: number;
   yaw: number;
   health: number;
@@ -32,6 +35,14 @@ export type QuakeShootableStateMap = Map<number, QuakeShootableState>;
 
 export function createQuakeShootableStateMap(): QuakeShootableStateMap {
   return new Map<number, QuakeShootableState>();
+}
+
+export interface QuakeShootableTransformSnapshot {
+  scale: number;
+  x: number;
+  y: number;
+  yaw: number;
+  z: number;
 }
 
 export interface QuakeEnemyState {
